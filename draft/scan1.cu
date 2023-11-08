@@ -1,41 +1,53 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
-#include <string>
 #include "CycleTimer.h"
 
-__global__ void hillis_steele_scan(float * d_out, float * d_in) {
-    for (unsigned int i =1; i <= blockDim.x/2; i = i*2) {
-        if (threadIdx.x >= i) 
-            d_out[threadIdx.x] = d_in[threadIdx.x] + d_in[threadIdx.x-i];
-        else 
-            d_out[threadIdx.x] = d_in[threadIdx.x];
+// Hillis and Steele parallel scan algorithm.
+// This implementation handles arrays only as large as 
+// it can processed by one thread block running on one SM of the GPU
+__global__ void inclusive_scan(float * d_out, float * d_in) {    
+    // double input-output buffers in shared memory, size is 2*n
+    extern __shared__ float sdata[]; 
+    int n = blockDim.x;
+    int tid = threadIdx.x;
+    int id = n * blockIdx.x + threadIdx.x;
         
-        __syncthreads(); // ensure all 
+    // inclusive_scan 
+    sdata[tid] = d_in[id];
+    __syncthreads(); 
 
-        // TODO: swap(d_in, d_out) pointers instead of deep copy d_out into d_in array?
-        d_in[threadIdx.x] = d_out[threadIdx.x];
-        __syncthreads();
+    // inId used to compute index into the input buffer 
+    // outId used to compute index into the output buffer 
+    int inId = 1; int outId = 1 - inId;
+    for (unsigned int offset = 1; offset < n; offset *= 2) {
+        inId = 1 - inId;
+        outId = 1 - inId;
+        if (tid >= offset) 
+            sdata[outId*n + tid] = sdata[inId*n + tid] + sdata[inId*n + tid - offset];
+        else 
+            sdata[outId*n + tid] = sdata[inId*n + tid];
+        
+        __syncthreads(); 
     }
+    d_out[id] =  sdata[outId*n + tid];
 }
 
-int main(int argc, char **argv) {
-    int N = 16;
+int main(int argc, char **argv) {    
+    int N = 1024; // int N = 9;   
     int N_BYTES = sizeof(float) *  N;
 
     float* h_in = new float[N];
-    for (int i = 0; i < N; i++) {
-        h_in[i] = float(i + 1);
+    for (int i = 0; i < N; i++) {        
+        h_in[i] = 1.0; // h_in[i] = float(i + 1);
     }
 
     float *d_in, *d_out;
     cudaMalloc((void **) &d_in, N_BYTES);
     cudaMalloc((void **) &d_out, N_BYTES);
-
     cudaMemcpy(d_in, h_in, N_BYTES, ::cudaMemcpyHostToDevice);
-
     double startTime = CycleTimer::currentSeconds();
-    hillis_steele_scan<<<1, N>>>(d_out, d_in);
+    inclusive_scan<<<1, N, 2*N*sizeof(float)>>>(d_out, d_in);
     double endTime = CycleTimer::currentSeconds();    
     printf("Time elapsed %.3f ms \n", 1000.f * (endTime - startTime));
 
