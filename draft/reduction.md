@@ -232,7 +232,33 @@ The idea is to partition the input array into segments so that each segment is o
 ![](f4.png)
 
 
+### segmented_shmem_sum_reduction
 
+```C++
+
+__global__ void segmented_shmem_sum_reduction(float *d_out, float *d_in)
+{
+    extern __shared__ float sdata[];
+    
+    unsigned int segment = 2*blockDim.x*blockIdx.x;        
+    unsigned int i = segment + threadIdx.x;
+    unsigned int t = threadIdx.x;
+
+    sdata[t] = d_in[i] + d_in[i + BLOCK_DIM];
+
+    for (unsigned int stride = blockDim.x/2; stride >= 1; stride /= 2) {
+        __syncthreads();
+
+        if (t < stride) {
+            sdata[t] += sdata[t + stride];
+        } 
+    }
+
+    if (threadIdx.x == 0) {
+        atomicAdd(d_out, sdata[0]);
+    }
+}
+```
 
 ## References
 - Programming Massively Parallel Processors - A Hands-on Approach, David B. Kirk, Wen-mei W. Hwu, First Edition, Morgan Kaufmann, Elsevier, 2010
