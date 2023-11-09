@@ -260,5 +260,90 @@ __global__ void segmented_shmem_sum_reduction(float *d_out, float *d_in)
 }
 ```
 
+## Thread coarsening for reduced overhead 
+
+segmented_shmem_sum_reduction try to maximize parallelism by using as many threads as possible. 
+- For a reduction of N elements, N/2 threads are launched. 
+- With a thread block size of 1024 threads, the resulting number of thread blocks is N/2048. 
+
+In processors with limited execution resources the hardware may have only enough resources to execute a portion of the thread blocks in parallel. 
+- In this case, the hardware will serialize the surplus thread blocks, executing a new thread block whenever an old one has completed. 
+- To parallelize reduction, we have actually paid a heavy price to distribute the work across multiple thread blocks. 
+
+Hardware underutilization increases with each successive stage of the reduction tree because of more warps becoming idle and the final warp experiencing more control divergence.The phase in which the hardware is underutilized occurs for every thread block that we launch. It is an inevitable price to pay if the thread blocks are to actually run in parallel. 
+
+- However, if the hardware is to serialize these thread blocks, we are better off serializing them ourselves in a more efficient manner. 
+- Thread coarsening is a category of optimizations that serialize some of the work into fewer threads to reduce parallelization overhead. 
+
+![](f5.png)
+
+### coarsened_shmem_sum_reduction
+
+```C++
+__global__ void coarsened_shmem_sum_reduction(float *d_out, float *d_in, unsigned int coarse_factor)
+{
+    extern __shared__ float sdata[];
+    
+    unsigned int segment = coarse_factor * 2*blockDim.x*blockIdx.x;
+    unsigned int i = segment + threadIdx.x;
+    unsigned int t = threadIdx.x;
+
+    float sum = d_in[i];
+    for (unsigned int tile = 1; tile < coarse_factor * 2; ++tile) {
+        sum += d_in[i + tile * BLOCK_DIM];
+    }
+    sdata[t] = sum;
+
+    for (unsigned int stride = blockDim.x/2; stride >= 1; stride /= 2) {
+        __syncthreads();
+
+        if (t < stride) {
+            sdata[t] += sdata[t + stride];
+        } 
+    }
+
+    if (threadIdx.x == 0) {
+        atomicAdd(d_out, sdata[0]);
+    }
+}
+```
+
+In `segmented_shmem_sum_reduction`, each thread block received 16 elements, which is two elements per thread. 
+- Each thread independently adds the two elements for which it is responsible; 
+- then the threads collaborate to execute a reduction tree. 
+
+In `coarsened_shmem_sum_reduction` we coarsen the thread block by a factor of 2. 
+- Hence each thread block receives twice the number of elements, 32 elements, which is four elements per thread. 
+- In this case, each thread independently adds four elements before the threads collaborate to execute a reduction tree. 
+
+The three steps to add the four elements are illustrated by the first three rows in figure f5.png. 
+- Note that all threads are active during these three steps. 
+- Moreover, since the threads independently add the four elements for which they are responsible, they do not need to synchronize
+- They do not need to store their partial sums to shared memory until after all four elements have been added. 
+
+The remaining steps in performing the reduction tree are the same as those in `segmented_shmem_sum_reduction`
+
+
+Compares the execution of two original thread blocks without coarsening serialized by the hardware, with one coarsened thread block performing the work of two thread blocks
+
+![](f6.png)
+
+
+The first thread block performs one step in which each thread adds the two elements for which it is responsible. All threads are active during this step, so the hardware is fully utilized. The remaining three steps execute the reduction tree in which half the threads drop out each step, underutilizing the hardware. Moreover, each step requires a barrier synchronization as well as accesses to shared memory.
+
+When the first thread block is done, the hardware then schedules the second thread block, which follows the same steps but on a different segment of the data. Overall, the two blocks collectively take a total of eight steps, of which two steps fully utilize the hardware and six steps underutilize the hardware and require barrier synchronization and shared memory access.
+
+
+By contrast,see the same amount of data is processed by only a single thread block that is coarsened by a factor of 2. 
+
+This thread block initially takes three steps in which each thread adds the four elements for which it is responsible. 
+
+All threads are active during all three steps, so the hardware is fully utilized, and no barrier synchronizations or accesses to shared memory are performed. 
+
+The remaining three steps execute the reduction tree in which half the threads drop out each step, underutilizing the hardware, and barrier synchronization and accesses to shared memory are needed. 
+
+Overall, only six steps are needed (instead of eight), of which three steps (instead of two) fully utilize the hardware and three steps (instead of six) underutilize the hardware and require barrier synchronization and shared memory access. Therefore thread coarsening effectively reduces the overhead from hardware underutilization, synchronization, and access to shared memory.
+
+
 ## References
 - Programming Massively Parallel Processors - A Hands-on Approach, David B. Kirk, Wen-mei W. Hwu, First Edition, Morgan Kaufmann, Elsevier, 2010
