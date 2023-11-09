@@ -220,6 +220,17 @@ Besides reducing the number of global memory accesses, the input array is not mo
 
 ## Hierarchical reduction for arbitrary input length
 
+The `__syncthreads()` is used as a barrier synchronization among all the active threads. 
+- __syncthreads() can be used only among threads in the same block. 
+- This limits the level of parallelism to 1024 threads on current hardware. 
+
+For large input arrays that contain millions or even billions of elements, we can benefit from launching more threads to further accelerate the reduction process. 
+- Since we do not have a good way to perform barrier synchronization among threads in different blocks, we will need to allow threads in different blocks to execute independently. 
+
+The idea is to partition the input array into segments so that each segment is of appropriate size for a block. All blocks then independently execute a reduction tree and accumulate their results to the final output using an atomic add operation.
+
+![](f4.png)
+
 
 
 

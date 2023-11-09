@@ -3,10 +3,11 @@
 #include <stdio.h>
 #include <getopt.h>
 #include <algorithm>
-#include "CycleTimer.h"
+#include <chrono>
 
-constexpr int N = 2*1024;
-constexpr int BLOCK_DIM = N/2;
+constexpr int BLOCKS = 1024;
+constexpr int BLOCK_DIM = 1024;
+constexpr int N = BLOCKS * BLOCK_DIM;
 
 __global__ void simple_reduce_kernel(float *d_out, float *d_in)
 {
@@ -54,14 +55,39 @@ __global__ void shmem_convergent_reduce_kernel(float *d_out, float *d_in)
     if (i == 0) *d_out = shared_in[0];
 }
 
+__global__ void segmented_shmem_sum_reduction(float *d_out, float *d_in)
+{
+    __shared__ float shared_data[BLOCK_DIM];
+
+    unsigned int segment = 2*blockDim.x*blockIdx.x;        
+    unsigned int i = segment + threadIdx.x;
+    unsigned int t = threadIdx.x;
+
+    shared_data[t] = d_in[i] + d_in[i + BLOCK_DIM];
+
+    for (unsigned int stride = blockDim.x/2; stride >= 1; stride /= 2) {
+        __syncthreads();
+
+        if (t < stride) {
+            shared_data[t] += shared_data[t + stride];
+        } 
+    }
+
+    if (threadIdx.x == 0) {
+        atomicAdd(d_out, shared_data[0]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     int IN_BYTES = sizeof(float) *  N;
     int OUT_BYTES = sizeof(float);
 
     float* h_in= new float[N];
-    std::fill_n(h_in, N, 1);
-
+    for (int i = 0; i < N; i++) {
+        h_in[i] = 1.0;
+    }
+    
     float *d_in;
     float *d_out;
     
@@ -70,21 +96,19 @@ int main(int argc, char **argv)
 
     cudaMemcpy(d_in, h_in, IN_BYTES, ::cudaMemcpyHostToDevice);
 
-    double startTime = CycleTimer::currentSeconds();
-
     // simple_reduce_kernel<<<1, N/2>>>(d_out, d_in);
     // convergent_reduce_kernel<<<1, N/2>>>(d_out, d_in);
-    shmem_convergent_reduce_kernel<<<1, N/2>>>(d_out, d_in);
+    // shmem_convergent_reduce_kernel<<<1, N/2>>>(d_out, d_in);
 
-    double endTime = CycleTimer::currentSeconds();    
-    printf("Time elapsed %.3f ms \n", 1000.f * (endTime - startTime));
+    segmented_shmem_sum_reduction<<<BLOCKS, BLOCK_DIM>>>(d_out, d_in);
 
     float h_out;
     cudaMemcpy(&h_out, d_out, OUT_BYTES, ::cudaMemcpyDeviceToHost);
 
-    printf("sum = %.3f \n", h_out);
+    printf("sum = %f \n", h_out);
 
     cudaFree(d_in);
     cudaFree(d_out);
+    free(h_in);    
     return 0;
 }
