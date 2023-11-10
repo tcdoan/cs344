@@ -34,7 +34,7 @@ __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
             XY[pout*n + t] = XY[pin*n + t];
         }
         
-        __syncthreads(); // TODO why we need a sync barrier?
+        __syncthreads(); 
     }
 
     Y[i] = XY[pout * n + t];
@@ -63,7 +63,7 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
             XY[pout*n + t] = XY[pin*n + t];
         }
         
-        __syncthreads(); // TODO works with no sync barrier?
+        __syncthreads(); 
     }
 
     Y[i] = XY[pout * n + t];
