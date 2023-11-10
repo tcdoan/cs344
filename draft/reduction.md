@@ -1,10 +1,10 @@
-# Simple CUDA kernel to perform parallel sum reduction tree.
+# CUDA kernels to perform parallel sum reduction tree
 
-This kernel performs sum reduction tree within a single block. 
+Below `simple_reduce_kernel` performs sum reduction tree within a single block. 
 
 - For an input array of N elements main() call this kernel and launch a grid with one block of N/2 threads.
 - A block can have up to 1024 threads, so this can process up to 2048 input elements. 
-> See reduction.cu for code that solves 2048-elements array limitation.
+> See `segmented_shmem_sum_reduction` and later kernels for techniques that can reduce arbitrary input length
 
 ## Steps
 - During step 1, all N/2 threads will participate; each thread adds two elements to produce N/2 partial sums. 
