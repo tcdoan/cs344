@@ -5,13 +5,13 @@
 #include <algorithm>
 #include <chrono>
 
-const unsigned int BLOCKS = 2;
-const unsigned int  BLOCK_DIM = 8;
-const unsigned int  SECTION_SIZE = 2*BLOCK_DIM;
-const unsigned int N = BLOCKS * BLOCK_DIM;
+const unsigned int BLOCKS = 1;
+const unsigned int  BLOCK_DIM = 1024;
+const unsigned int N = 2* BLOCKS * BLOCK_DIM;
 
 __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
 {    
+    // allocated on invocation 
     extern __shared__ float XY[];
 
     int n = blockDim.x;
@@ -43,6 +43,7 @@ __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
 
 __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 {
+    // allocated on invocation 
     extern __shared__ float XY[];
 
     int bs = blockDim.x;
@@ -70,42 +71,52 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
     Y[i] = XY[pout * bs + t];
 }
 
-__global__ void brent_kung_inclusive_scan(float *Y, float *X, unsigned int n)
+__global__ void blelloch_exclusive_scan(float *Y, float *X, int n)
 {
+    // allocated on invocation 
     extern __shared__ float XY[];
 
-    // Only validated with block size bs = 2^n up to 1024
-    int bs = blockDim.x;
     unsigned int t = threadIdx.x;
+    unsigned int stride = 1;
 
-    // why times 2 in 2*blockIdx.x * bs + t
-    unsigned int i = 2*blockIdx.x * bs + t;
+    // copy (2 * blockDim.x) entries from input X into shared memory XY
+    XY[2*t] = X[2*t]; 
+    XY[2*t + 1] = X[2*t + 1];
 
-    if (i < n) XY[t] = X[i];
-    if (i + bs < n) XY[t + bs] = X[i + bs];
-
-    for (unsigned int stride = 1; stride <= bs; stride *= 2) {
-        __syncthreads(); 
-        unsigned int index = (t+1) * 2 * stride - 1;
-
-        if (index < SECTION_SIZE) {
-            XY[index] += XY[index - stride];
+    // build patial sums in place up the tree 
+    for (unsigned int d = n>>1; d > 0; d >>= 1) {
+        __syncthreads();
+        
+        if (t < d) {
+            int ai = stride * (2*t + 1) -1;
+            int bi = stride * (2*t + 2) -1;
+            XY[bi] += XY[ai];
         }
+        stride *= 2;
     }
 
-    for (unsigned int stride = SECTION_SIZE/4; stride > 0; stride /= 2) {
-        __syncthreads(); 
-        unsigned int index = (t+1) * 2 * stride - 1;
+    // zero out the last element 
+    if (t == 0) { XY[n - 1] = 0; } 
 
-        if (index + stride < SECTION_SIZE) {
-            XY[index + stride] += XY[index];
-        }        
-    }
+     // traverse down tree and build scans
+    for (int d = 1; d < n; d *= 2) {
+        stride >>= 1;
+        __syncthreads();
+
+        if (t < d) {
+            int ai = stride*(2*t+1)-1;
+            int bi = stride*(2*t+2)-1;
+            float tmp = XY[ai];
+            XY[ai] = XY[bi];
+            XY[bi] += tmp;
+        }
+    } 
 
     __syncthreads();
-    if (i < n) Y[i] = XY[t];
-    if (i + bs < N) Y[i + bs] = XY[t + bs];
+    Y[2*t] = XY[2*t];
+    Y[2*t + 1] = XY[2*t + 1];
 }
+
 
 int main(int argc, char **argv)
 {
@@ -128,7 +139,7 @@ int main(int argc, char **argv)
 
     // double_buffers_inclusive_scan_kernel<<<1, N, sizeof(float)* 2 * N>>>(d_out, d_in);
     // double_buffers_exclusive_scan<<<1, N, sizeof(float)* 2 * N>>>(d_out, d_in);
-    brent_kung_inclusive_scan<<<1, N, sizeof(float)* 2 * N>>>(d_out, d_in, 2*N);
+    blelloch_exclusive_scan<<<BLOCKS, BLOCK_DIM, 2 * sizeof(float) * BLOCK_DIM >>>(d_out, d_in, 2*BLOCK_DIM);
 
     float* h_out= new float[N];
     cudaMemcpy(h_out, d_out, ARR_BYTES, ::cudaMemcpyDeviceToHost);
