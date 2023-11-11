@@ -23,7 +23,7 @@ Since the reduction tree for element i involves i add operations, naive approach
 
 A sharing approach, is the Kogge-Stone algorithm. 
 
-![](h1.png)
+![Fig. H1](h1.png)
 
 ### double_buffers_inclusive_scan_kernel
 ```C++
@@ -130,6 +130,8 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 ```
 
 ## The Blelloch algorithm 
+
+![Fig. H2](h2.png)
 
 ```C++
 __global__ void blelloch_exclusive_scan(float *Y, float *X, int n)
