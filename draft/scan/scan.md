@@ -131,6 +131,53 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 
 ## The Blelloch algorithm 
 
+```C++
+__global__ void blelloch_exclusive_scan(float *Y, float *X, int n)
+{
+    // allocated on invocation 
+    extern __shared__ float XY[];
+
+    unsigned int t = threadIdx.x;
+    unsigned int stride = 1;
+
+    // copy (2 * blockDim.x) entries from input X into shared memory XY
+    XY[2*t] = X[2*t]; 
+    XY[2*t + 1] = X[2*t + 1];
+
+    // build patial sums in place up the tree 
+    for (unsigned int d = n>>1; d > 0; d >>= 1) {
+        __syncthreads();
+        
+        if (t < d) {
+            int ai = stride * (2*t + 1) -1;
+            int bi = stride * (2*t + 2) -1;
+            XY[bi] += XY[ai];
+        }
+        stride *= 2;
+    }
+
+    // zero out the last element 
+    if (t == 0) { XY[n - 1] = 0; } 
+
+     // traverse down tree and build scans
+    for (int d = 1; d < n; d *= 2) {
+        stride >>= 1;
+        __syncthreads();
+
+        if (t < d) {
+            int ai = stride*(2*t+1)-1;
+            int bi = stride*(2*t+2)-1;
+            float tmp = XY[ai];
+            XY[ai] = XY[bi];
+            XY[bi] += tmp;
+        }
+    } 
+
+    __syncthreads();
+    Y[2*t] = XY[2*t];
+    Y[2*t + 1] = XY[2*t + 1];
+}
+```
 
 ## References
 - Hwu, Wen-mei W.; Kirk, David B.; Hajj, Izzat El. Programming Massively Parallel Processors. Elsevier Science. Kindle Edition. 
