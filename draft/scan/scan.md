@@ -129,5 +129,73 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 }
 ```
 
+## The Brent-Kung algorithm 
+
+Kogge-Stone kernel is conceptually simple but its work efficiency is quite low for some practical applications. 
+- There are potential opportunities for further sharing of some intermediate results. 
+- However, to allow more sharing across multiple threads, we need to strategically calculate the intermediate results and distribute them to different threads, which may require additional computation steps.
+
+The fastest parallel way to produce sum values for a set of values is a reduction tree. 
+- With sufficient execution units, a reduction tree can generate the sum for N values in log2(N) time units. 
+- The tree can also generate several sub-sums that can be used in the calculation of some of the scan output values. 
+
+
+The Brent-Kung adder design can be used to implement a parallel scan algorithm with better work efficiency. 
+
+Fig. H2 illustrates the steps for a parallel inclusive scan algorithm based on the Brent-Kung adder design. 
+
+![H2](h2.png)
+
+In the top half of above figure, we produce the sum of all 16 elements in four steps.
+
+- We use the minimal number of operations needed to generate the sum. 
+- During the first step, only the odd element of XY[i] will be updated to XY[i-1]+XY[i]. 
+- During the second step, only the XY elements whose indices are of the form of 4*n−1, which are 3, 7, 11, and 15 in Fig. 11.5, will be updated. 
+- During the third step, only the XY elements whose indices are of the form 8*n−1, which are 7 and 15, will be updated. 
+- During the fourth step, only XY[15] is updated. 
+
+The total number of operations performed is 8+4+2+1=15. In general, for a scan section of N elements, we would do (N/2)+(N/4)+…+2+1=N−1 operations for this reduction phase.
+
+We could implement the reduction tree phase of the parallel scan using the following loop:
+
+![H4](h4.png)
+
+The loop is similar to the reduction in parallel recude code. There are two differences. 
+
+- First difference is that we accumulate the sum value toward the highest position, which is XY[blockDim.x-1], rather than XY[0]. This is because the final result of the highest position is the total sum. For this reason, each active thread reaches for a partial sum to its left by subtracting the stride value from its index. 
+
+- The second difference is that we want the active threads to have a thread index of the form 2n−1 rather than 2n. This is why we add 1 to the threadIdx.x before the modulo (%) operation when we select the threads for performing addition in each iteration.
+
+One drawback of this style of reduction is that it has significant control divergence problems. A better way is to use a decreasing number of contiguous threads to perform the additions as the loop advances. Unfortunately, the technique we used to reduce divergence cannot be used in the scan reduction tree phase, since it does not generate the needed partial sum values in the intermediate XY positions. 
+
+We resort to a more sophisticated thread index to data index mapping that maps a continuous section of threads to a series of data positions that are of stride distance apart. The following code does so by mapping a continuous section of threads to the XY positions whose indices are of the form k*2n−1:
+
+
+![H5](h5.png)
+
+
+The second part of the algorithm is to use a reverse tree to distribute the partial sums to the positions that can use them to complete the result of those positions. 
+
+The distribution of partial sums is illustrated in the bottom half of Fig. H2. To understand the design of the reverse tree, we should first analyze the needs for additional values to complete the scan output at each position of XY. It should be apparent from an inspection of H2 that the additions in the reduction tree always accumulate input elements in a continuous range. Therefore we know that the values that have been accumulated into each position of XY can always be expressed as a range of input elements xi…xj, where xi is the starting position and xj is the ending position (inclusive).
+
+![H3](h3.png)
+
+H3 shows the state of each position (column), including both the values already accumulated into the position and the need for additional input element values at each level (row) of the reverse tree. 
+
+The state of each position initially and after each level of additions in the reverse tree is expressed as the input elements, in the form xi…xj, that have already been accounted for in the position. For example, x8…x11 in row Initial and column 11 indicates that the values of x8, x9, x10, and x11 have been accumulated into XY[11] before the reverse tree begins. At the end of the reduction tree phase, we have quite a few positions that are complete with the final scan values. In our example, XY[0], XY[1], XY[3], XY[7], and XY[15] are all complete with their final answers.
+
+To organize our second half of the addition operations, we will first show all the operations that need partial sums from four positions away, then two positions away, then one position away. 
+
+- During the first level of the reverse tree, we add XY[7] to XY[11], which brings XY[11] to the final answer. 
+
+- During the second level, we complete XY[5], XY[9], and XY[13], which can be completed with the partial sums that are two positions away: XY[3], XY[7], and XY[11], respectively. 
+
+- Finally, during the third level, we complete all even positions XY[2], XY[4], XY[6], XY[8], XY[10], and XY[12] by accumulating the partial sums that are one position away (immediate left neighbor of each position).
+
+To implement the reverse tree we let the stride value decreases from SECTION_SIZE/4 to 1. In each iteration we need to “push” the value of XY elements from positions that are multiples of twice the stride value minus 1 to the right by stride positions.
+
+![H6](h6.png)
+
+
 ## References
-- Programming Massively Parallel Processors - A Hands-on Approach, David B. Kirk, Wen-mei W. Hwu, First Edition, Morgan Kaufmann, Elsevier, 2010
+Hwu, Wen-mei W.; Kirk, David B.; Hajj, Izzat El. Programming Massively Parallel Processors. Elsevier Science. Kindle Edition. 
