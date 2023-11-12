@@ -6,13 +6,12 @@
 #include <chrono>
 
 const unsigned int BLOCKS = 1;
-const unsigned int  BLOCK_DIM = 256;
-const unsigned int N = BLOCKS * BLOCK_DIM;
+const unsigned int BLOCK_DIM = 256;
 
-// Kogge-Stone kernels 
+// Kogge-Stone kernels
 __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
-{    
-    // allocated on invocation 
+{
+    // allocated on invocation
     extern __shared__ float XY[];
 
     int n = blockDim.x;
@@ -24,19 +23,22 @@ __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
     __syncthreads();
 
     int pout = 0;
-    int pin = 1-pout;
+    int pin = 1 - pout;
 
-    for (unsigned int stride = 1; stride < n; stride *= 2) {
+    for (unsigned int stride = 1; stride < n; stride *= 2)
+    {
         pin = 1 - pin;
         pout = 1 - pin;
-        if (t >= stride) {
-            XY[pout*n + t] = XY[pin*n + t] + XY[pin*n + t - stride];
+        if (t >= stride)
+        {
+            XY[pout * n + t] = XY[pin * n + t] + XY[pin * n + t - stride];
         }
-        else  {  
-            XY[pout*n + t] = XY[pin*n + t];
+        else
+        {
+            XY[pout * n + t] = XY[pin * n + t];
         }
-        
-        __syncthreads(); 
+
+        __syncthreads();
     }
 
     Y[i] = XY[pout * n + t];
@@ -44,29 +46,32 @@ __global__ void double_buffers_inclusive_scan_kernel(float *Y, float *X)
 
 __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 {
-    // allocated on invocation 
+    // allocated on invocation
     extern __shared__ float XY[];
 
     int bs = blockDim.x;
     unsigned int t = threadIdx.x;
     unsigned int i = blockIdx.x * bs + t;
 
-    XY[t] = ((t == 0) ? 0.0f : X[i-1]);
+    XY[t] = ((t == 0) ? 0.0f : X[i - 1]);
     __syncthreads();
 
     int pout = 0;
-    int pin = 1-pout;
-    for (unsigned int stride = 1; stride < bs; stride *= 2) {
+    int pin = 1 - pout;
+    for (unsigned int stride = 1; stride < bs; stride *= 2)
+    {
         pin = 1 - pin;
         pout = 1 - pin;
-        if (t >= stride) {
-            XY[pout*bs + t] = XY[pin*bs + t] + XY[pin*bs + t - stride];
+        if (t >= stride)
+        {
+            XY[pout * bs + t] = XY[pin * bs + t] + XY[pin * bs + t - stride];
         }
-        else  {  
-            XY[pout*bs + t] = XY[pin*bs + t];
+        else
+        {
+            XY[pout * bs + t] = XY[pin * bs + t];
         }
-        
-        __syncthreads(); 
+
+        __syncthreads();
     }
 
     Y[i] = XY[pout * bs + t];
@@ -74,38 +79,37 @@ __global__ void double_buffers_exclusive_scan(float *Y, float *X)
 
 int main(int argc, char **argv)
 {
-    unsigned int ARR_BYTES = sizeof(float) *  N;
+    int N = BLOCKS * BLOCK_DIM;
 
-    float* h_in= new float[N];
-    for (int i = 0; i < N; i++) {
-        printf(i % 20 == 0 ? "\n" : "\t");
-        h_in[i] = 2.0f;
-        printf("%.0f", h_in[i]);
-    }
-    
+    // int N = 65;
+    unsigned int bytes = sizeof(float) * N;
+
+    float *h_data = (float *)malloc(bytes);
+    for (unsigned int i = 0; i < min(N, 100); ++i)
+        h_data[i] = 1.0f;
+
     float *d_in;
     float *d_out;
-    
-    cudaMalloc((void **) &d_in, ARR_BYTES);
-    cudaMalloc((void **) &d_out, ARR_BYTES);
 
-    cudaMemcpy(d_in, h_in, ARR_BYTES, ::cudaMemcpyHostToDevice);
+    cudaMalloc((void **)&d_in, bytes);
+    cudaMalloc((void **)&d_out, bytes);
 
-    double_buffers_inclusive_scan_kernel<<<BLOCKS, N, sizeof(float)* 2 * N>>>(d_out, d_in);
+    cudaMemcpy(d_in, h_data, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_out, h_data, bytes, cudaMemcpyHostToDevice);
 
-    float* h_out= new float[N];
-    cudaMemcpy(h_out, d_out, ARR_BYTES, ::cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    double_buffers_inclusive_scan_kernel<<<BLOCKS, N, sizeof(float) * 2 * N>>>(d_out, d_in);
 
-    for (int i = 0; i < N; i++) {        
-        printf(i % 20 == 0 ? "\n" : "\t");
-        printf("%.0f ", h_out[i]);
+    cudaMemcpy(h_data, d_out, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    for (int i = 0; i < min(N, 100); i++)
+    {
+        printf(i == 20 ? "\n" : "\t");
+        printf("%.0f ", h_data[i]);
     }
     printf("\n");
 
-    cudaFree(d_in);
+    free(h_data);
     cudaFree(d_out);
-    free(h_in);
-    free(h_out);
+    cudaFree(d_in);
+
     return 0;
 }

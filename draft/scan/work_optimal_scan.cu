@@ -1,18 +1,30 @@
+// Blelloch algorithm
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
 #include <algorithm>
-#include <chrono>
 
-const unsigned int BLOCKS = 1;
-const unsigned int BLOCK_DIM = 1024;
+#define BLOCK_SIZE 32
+#define NUM_BANKS 16
+#define LOG_NUM_BANKS 4
 
-// power_of_2(7.0) = 4
-inline int power_of_2(float f)
+#define FIND_OFFSET(index) ((index) >> LOG_NUM_BANKS)
+
+float **d_block_sums;
+unsigned int d_num_elements_allocated = 0;
+unsigned int d_num_levels_allocated = 0;
+
+int get_levels(unsigned int x, unsigned int n)
+{
+    int levels = log((x - 0.5)) / log((float)n);
+    return levels;
+}
+
+inline int float_power_of_2(int x)
 {
     int e;
-    frexp(f, &e);
+    frexp((float)x, &e);
     return 1 << (e - 1);
 }
 
@@ -21,94 +33,286 @@ inline bool power_of_2(int n)
     return (((n - 1) & n) == 0);
 }
 
-__global__ void blelloch_exclusive_scan(float *Y, float *X, int n)
+template <bool POWER_OF_2>
+__device__ void copy_to_shared_data(float *shared_data, const float *d_in, int n, int base_idx,
+                                    int &ai, int &bi, int &mem_ai, int &mem_bi,
+                                    int &offset_bank_a, int &offset_bank_b)
 {
-    // allocated on invocation
-    extern __shared__ float XY[];
+    int t = threadIdx.x;
+    mem_ai = base_idx + threadIdx.x;
+    mem_bi = mem_ai + blockDim.x;
 
-    unsigned int t = threadIdx.x;
+    ai = t;
+    bi = t + blockDim.x;
+
+    offset_bank_a = FIND_OFFSET(ai);
+    offset_bank_b = FIND_OFFSET(bi);
+
+    shared_data[ai + offset_bank_a] = d_in[mem_ai];
+
+    if (POWER_OF_2)
+    {
+        shared_data[bi + offset_bank_b] = (bi < n) ? d_in[mem_bi] : 0;
+    }
+    else
+    {
+        shared_data[bi + offset_bank_b] = d_in[mem_bi];
+    }
+}
+
+template <bool POWER_OF_2>
+__device__ void copy_to_global_mem(float *d_out, const float *shared_data, int n,
+                                   int ai, int bi, int mem_ai, int mem_bi, int offset_bank_a, int offset_bank_b)
+{
+    __syncthreads();
+
+    d_out[mem_ai] = shared_data[ai + offset_bank_a];
+    if (POWER_OF_2)
+    {
+        if (bi < n)
+            d_out[mem_bi] = shared_data[bi + offset_bank_b];
+    }
+    else
+    {
+        d_out[mem_bi] = shared_data[bi + offset_bank_b];
+    }
+}
+
+template <bool STORE_SUM>
+__device__ void zero_last_element(float *shared_data, float *d_block_sums, int block_idx)
+{
+    if (threadIdx.x == 0)
+    {
+        int index = (blockDim.x << 1) - 1;
+        index += FIND_OFFSET(index);
+
+        if (STORE_SUM)
+        {
+            d_block_sums[block_idx] = shared_data[index];
+        }
+
+        shared_data[index] = 0;
+    }
+}
+
+__device__ unsigned int leaves_2_root_scan(float *shared_data)
+{
+    unsigned int thid = threadIdx.x;
     unsigned int stride = 1;
 
-    // copy (2 * blockDim.x) entries from input X into shared memory XY
-    XY[2 * t] = X[2 * t];
-    XY[2 * t + 1] = X[2 * t + 1];
-
-    // build patial sums in place up the tree
-    for (unsigned int d = n >> 1; d > 0; d >>= 1)
+    for (int d = blockDim.x; d > 0; d >>= 1)
     {
         __syncthreads();
 
-        if (t < d)
+        if (thid < d)
         {
-            int ai = stride * (2 * t + 1) - 1;
-            int bi = stride * (2 * t + 2) - 1;
-            XY[bi] += XY[ai];
+            int i = __mul24(__mul24(2, stride), thid);
+            int ai = i + stride - 1;
+            int bi = ai + stride;
+
+            ai += FIND_OFFSET(ai);
+            bi += FIND_OFFSET(bi);
+
+            shared_data[bi] += shared_data[ai];
         }
+
         stride *= 2;
     }
 
-    // zero out the last element
-    if (t == 0)
-    {
-        XY[n - 1] = 0;
-    }
+    return stride;
+}
 
-    // traverse down tree and build scans
-    for (int d = 1; d < n; d *= 2)
+__device__ void root_2_leaves_scan(float *s_data, unsigned int stride)
+{
+    unsigned int thid = threadIdx.x;
+    for (int d = 1; d <= blockDim.x; d *= 2)
     {
         stride >>= 1;
-        __syncthreads();
 
-        if (t < d)
+        __syncthreads();
+        if (thid < d)
         {
-            int ai = stride * (2 * t + 1) - 1;
-            int bi = stride * (2 * t + 2) - 1;
-            float tmp = XY[ai];
-            XY[ai] = XY[bi];
-            XY[bi] += tmp;
+            int i = __mul24(__mul24(2, stride), thid);
+            int ai = i + stride - 1;
+            int bi = ai + stride;
+
+            ai += FIND_OFFSET(ai);
+            bi += FIND_OFFSET(bi);
+
+            float t = s_data[ai];
+            s_data[ai] = s_data[bi];
+            s_data[bi] += t;
         }
     }
+}
 
+template <bool STORE_SUM>
+__device__ void scan_block(float *shared_data, int block_idx, float *block_sums)
+{
+    int stride = leaves_2_root_scan(shared_data);
+    zero_last_element<STORE_SUM>(shared_data, block_sums, (block_idx == 0) ? blockIdx.x : block_idx);
+    root_2_leaves_scan(shared_data, stride);
+}
+
+template <bool STORE_SUM, bool POWER_OF_2>
+__global__ void scan(float *d_out, const float *d_in, float *d_block_sums_level, int n, int block_idx, int base_idx)
+{
+    int ai, bi, mem_ai, mem_bi, offset_bank_a, offset_bank_b;
+    extern __shared__ float shared_data[];
+
+    copy_to_shared_data<POWER_OF_2>(shared_data, d_in, n, (base_idx == 0) ? __mul24(blockIdx.x, (blockDim.x << 1)) : base_idx,
+                                    ai, bi, mem_ai, mem_bi, offset_bank_a, offset_bank_b);
+
+    scan_block<STORE_SUM>(shared_data, block_idx, d_block_sums_level);
+    copy_to_global_mem<POWER_OF_2>(d_out, shared_data, n, ai, bi, mem_ai, mem_bi, offset_bank_a, offset_bank_b);
+}
+
+__global__ void uniform_add(float *d_out, float *uniforms, int n, int block_offset, int base_idx)
+{
+    __shared__ float init;
+    if (threadIdx.x == 0)
+        init = uniforms[blockIdx.x + block_offset];
+    unsigned int address = __mul24(blockIdx.x, (blockDim.x << 1)) + base_idx + threadIdx.x;
     __syncthreads();
-    Y[2 * t] = XY[2 * t];
-    Y[2 * t + 1] = XY[2 * t + 1];
+    d_out[address] += init;
+    d_out[address + blockDim.x] += (threadIdx.x + blockDim.x < n) * init;
+}
+
+void allocate_block_sums(unsigned int num_elements)
+{
+    d_num_elements_allocated = num_elements;
+    int levels = get_levels(num_elements, 2 * BLOCK_SIZE);
+
+    d_num_levels_allocated = levels;
+    d_block_sums = (float **)malloc(levels * sizeof(float *));
+
+    unsigned int elements = num_elements;
+    int level = 0;
+
+    do
+    {
+        unsigned int num_blocks = max(1, (int)ceil((float)elements / (2.f * BLOCK_SIZE)));
+        if (num_blocks > 1)
+        {
+            cudaMalloc((void **)&d_block_sums[level++], num_blocks * sizeof(float));
+        }
+        elements = num_blocks;
+    } while (elements > 1);
+}
+
+void deallocate_block_sums()
+{
+    for (int i = 0; i < d_num_levels_allocated; i++)
+        cudaFree(d_block_sums[i]);
+
+    free((void **)d_block_sums);
+    d_block_sums = 0;
+    d_num_levels_allocated = 0;
+    d_num_elements_allocated = 0;
+}
+
+void recursive_scan(float *d_out, const float *d_in, int num_elements, int level)
+{
+    unsigned int num_blocks = max(1, (int)ceil((float)num_elements / (2.f * BLOCK_SIZE)));
+    unsigned int num_threads;
+
+    if (num_blocks > 1)
+    {
+        num_threads = BLOCK_SIZE;
+    }
+    else if (power_of_2(num_elements))
+    {
+        num_threads = num_elements / 2;
+    }
+    else
+    {
+        num_threads = float_power_of_2(num_elements);
+    }
+
+    unsigned int block_elements = num_threads * 2;
+    unsigned int last_block_elements = num_elements - (num_blocks - 1) * block_elements;
+    unsigned int num_last_block_threads = max(1, last_block_elements / 2);
+    unsigned int np2_last_block = 0;
+    unsigned int last_lock_shmem = 0;
+
+    if (last_block_elements != block_elements)
+    {
+        np2_last_block = 1;
+
+        if (!power_of_2(last_block_elements))
+        {
+            num_last_block_threads = float_power_of_2(last_block_elements);
+        }
+
+        unsigned int extra_space = (2 * num_last_block_threads) / NUM_BANKS;
+        last_lock_shmem = sizeof(float) * (2 * num_last_block_threads + extra_space);
+    }
+
+    unsigned int extra_space = block_elements / NUM_BANKS;
+    unsigned int shared_mem_size = sizeof(float) * (block_elements + extra_space);
+
+    dim3 grid(max(1, num_blocks - np2_last_block), 1, 1);
+    dim3 threads(num_threads, 1, 1);
+
+    if (num_blocks > 1)
+    {
+        scan<true, false><<<grid, threads, shared_mem_size>>>(d_out, d_in, d_block_sums[level], num_threads * 2, 0, 0);
+        if (np2_last_block)
+        {
+            scan<true, true><<<1, num_last_block_threads, last_lock_shmem>>>(d_out, d_in, d_block_sums[level], last_block_elements, num_blocks - 1, num_elements - last_block_elements);
+        }
+
+        recursive_scan(d_block_sums[level], d_block_sums[level], num_blocks, level + 1);
+        uniform_add<<<grid, threads>>>(d_out, d_block_sums[level], num_elements - last_block_elements, 0, 0);
+        if (np2_last_block)
+        {
+            uniform_add<<<1, num_last_block_threads>>>(d_out, d_block_sums[level], last_block_elements, num_blocks - 1, num_elements - last_block_elements);
+        }
+    }
+    else if (power_of_2(num_elements))
+    {
+        scan<false, false><<<grid, threads, shared_mem_size>>>(d_out, d_in, 0, num_threads * 2, 0, 0);
+    }
+    else
+    {
+        scan<false, true><<<grid, threads, shared_mem_size>>>(d_out, d_in, 0, num_elements, 0, 0);
+    }
 }
 
 int main(int argc, char **argv)
 {
-    int N = BLOCKS * 2 * BLOCK_DIM;
-    unsigned int mem_size = sizeof(float) * N;
+    int N = 40000000;
+    // int N = 65;
+    unsigned int bytes = sizeof(float) * N;
 
-    float *h_data = new float[N];
-    for (int i = 0; i < N; i++)
-    {
-        printf(i % 20 == 0 ? "\n" : "\t");
-        h_data[i] = 1.0f;
-        printf("%.0f", h_data[i]);
-    }
+    float *h_data = (float *)malloc(bytes);
+    for (unsigned int i = 0; i < N; ++i)
+        h_data[i] = 2.0f;
 
     float *d_in;
     float *d_out;
 
-    cudaMalloc((void **)&d_in, mem_size);
-    cudaMalloc((void **)&d_out, mem_size);
+    cudaMalloc((void **)&d_in, bytes);
+    cudaMalloc((void **)&d_out, bytes);
 
-    cudaMemcpy(d_in, h_data, mem_size, ::cudaMemcpyHostToDevice);
-    cudaMemcpy(d_out, h_data, mem_size, ::cudaMemcpyHostToDevice);
+    cudaMemcpy(d_in, h_data, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_out, h_data, bytes, cudaMemcpyHostToDevice);
 
-    blelloch_exclusive_scan<<<BLOCKS, BLOCK_DIM, 2 * sizeof(float) * BLOCK_DIM>>>(d_out, d_in, 2 * BLOCK_DIM);
+    allocate_block_sums(N);
 
-    cudaMemcpy(h_data, d_out, mem_size, ::cudaMemcpyDeviceToHost);
+    recursive_scan(d_out, d_in, N, 0);
 
-    for (int i = 0; i < N; i++)
+    deallocate_block_sums();
+
+    cudaMemcpy(h_data, d_out, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    for (int i = 0; i < min(N, 100); i++)
     {
-        printf(i % 20 == 0 ? "\n" : "\t");
+        printf(i == 20 ? "\n" : "\t");
         printf("%.0f ", h_data[i]);
     }
     printf("\n");
 
-    cudaFree(d_in);
-    cudaFree(d_out);
     free(h_data);
-    return 0;
+    cudaFree(d_out);
+    cudaFree(d_in);
 }
