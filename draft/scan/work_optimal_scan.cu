@@ -21,7 +21,7 @@ int get_levels(unsigned int x, unsigned int n) {
     return levels;
 }
 
-inline int float_power_of_2(int x) {
+inline int num_threads(int x) {
     int e;
     frexp((float)x, &e);
     return 1 << (e - 1);
@@ -205,7 +205,7 @@ void recursive_scan(float *d_out, const float *d_in, int num_elements,
     } else if (power_of_2(num_elements)) {
         num_threads = num_elements / 2;
     } else {
-        num_threads = float_power_of_2(num_elements);
+        num_threads = num_threads(num_elements);
     }
 
     unsigned int block_elements = num_threads * 2;

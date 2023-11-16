@@ -1,4 +1,6 @@
 {
-	"editor.formatOnPaste": true,
-	"editor.formatOnSave": true,
+    "files.associations": {
+        "ostream": "cpp",
+        "cmath": "cpp"
+    }
 }
