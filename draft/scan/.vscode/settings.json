@@ -3,5 +3,6 @@
         "ostream": "cpp",
         "cmath": "cpp"
     },
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "remote.SSH.remoteServerListenOnSocket": true
 }
