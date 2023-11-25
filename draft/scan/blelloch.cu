@@ -42,12 +42,6 @@ __global__ void parallel_scan(float *Y, float *X, int unsigned n) {
     for (int d = 0, two_power_d = 1; two_power_d < n / 2; d++, two_power_d <<= 1) {
         __syncthreads();
         int two_power_dplus1 = two_power_d << 1;
-        int bi = i + two_power_dplus1 - 1;
-        int ai = i + two_power_d - 1;
-
-        printf("\n thread %d, d %d, two_power_d %d, two_power_dplus1 %d, ai %d, bi %d \n", i, d, two_power_d,
-               two_power_dplus1, ai, bi);
-
         XY[i + two_power_dplus1 - 1] = XY[i + two_power_d - 1] + XY[i + two_power_dplus1 - 1];
     }
 
