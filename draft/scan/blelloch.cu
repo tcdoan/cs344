@@ -5,7 +5,7 @@
 #include <algorithm>
 
 const unsigned int BLOCKS = 1;
-const unsigned int BLOCK_DIM = 4;
+const unsigned int BLOCK_DIM = 8;
 
 __global__ void parallel_scan(int *Y, int *X, int unsigned n) {
     extern __shared__ int XY[];
@@ -17,13 +17,30 @@ __global__ void parallel_scan(int *Y, int *X, int unsigned n) {
     // for d from 0 to log(n) - 1
     //      in parallel for i from 0 to n-1 by 2^(d+1)
     //          XY[i + 2^(d+1) -1] = XY[i + 2^(d+1) -1] + XY[i + 2^d -1]
-    for (int d = 0, two_power_d = 1; two_power_d < n; d++, two_power_d <<= 1) {
+    for (int two_power_d = 1; two_power_d < n; two_power_d <<= 1) {
         __syncthreads();
 
         int two_power_dplus1 = two_power_d << 1;
-        int ai = i + two_power_d - 1;
-        int bi = i + two_power_dplus1 - 1;
-        XY[bi] = XY[ai] + XY[bi];
+        if (i % two_power_dplus1 == 0) {
+            int ai = i + two_power_d - 1;
+            int bi = i + two_power_dplus1 - 1;
+            XY[bi] += XY[ai];
+        }
+    }
+
+    if (i == 0) XY[n - 1] = 0;  // clear last element
+
+    for (int two_power_d = n >> 1; two_power_d > 0; two_power_d >>= 1) {
+        __syncthreads();
+
+        int two_power_dplus1 = two_power_d << 1;
+        if (i % two_power_dplus1 == 0) {
+            int ai = i + two_power_d - 1;
+            int bi = i + two_power_dplus1 - 1;
+            int temp = XY[ai];
+            XY[ai] = XY[bi];
+            XY[bi] += temp;
+        }
     }
 
     Y[2 * i] = XY[2 * i];
@@ -31,7 +48,7 @@ __global__ void parallel_scan(int *Y, int *X, int unsigned n) {
 }
 
 int main(int argc, char **argv) {
-    int N = 2 * BLOCKS * BLOCK_DIM;
+    int N = BLOCKS * BLOCK_DIM;
 
     unsigned int bytes = sizeof(int) * N;
     int h_data[8] = {3, 1, 7, 0, 4, 1, 6, 3};
