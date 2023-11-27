@@ -1,8 +1,71 @@
-./mandelbrot
-[mandelbrot serial]:            [444.549] ms
-Wrote image file mandelbrot-serial.ppm
+Program 1: Parallel Fractal Generation Using Threads 
+2 threads
+    ./mandelbrot
+        [mandelbrot serial]:            [444.549] ms
+        [mandelbrot thread]:            [217.658] ms
+                                        (2.04x speedup from 2 threads)
 
-[mandelbrot thread]:            [217.658] ms
-Wrote image file mandelbrot-thread.ppm
-                                (2.04x speedup from 2 threads)
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [243.908] ms
+        [mandelbrot thread]:            [153.016] ms
+                                        (1.59x speedup from 2 threads)
 
+3 threads
+    ./mandelbrot
+        [mandelbrot serial]:            [445.001] ms
+        [mandelbrot thread]:            [256.541] ms
+                                        (1.73x speedup from 3 threads)
+
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [243.788] ms
+        [mandelbrot thread]:            [112.969] ms
+                                        (2.16x speedup from 3 threads)
+
+4 threads
+    ./mandelbrot
+        [mandelbrot serial]:            [415.743] ms
+        [mandelbrot thread]:            [177.920] ms
+                                        (2.34x speedup from 4 threads)
+
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [259.517] ms       
+        [mandelbrot thread]:            [96.876] ms
+                                        (2.68x speedup from 4 threads)
+
+
+5 threads
+    ./mandelbrot
+        [mandelbrot serial]:            [444.034] ms
+        [mandelbrot thread]:            [171.137] ms
+                                        (2.59x speedup from 5 threads)
+    
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [260.639] ms
+        [mandelbrot thread]:            [86.987] ms
+                                        (3.00x speedup from 5 threads)
+
+6 threads
+    ./mandelbrot
+        [mandelbrot serial]:            [445.146] ms
+        [mandelbrot thread]:            [133.928] ms
+                                        (3.32x speedup from 6 threads)
+
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [260.780] ms
+        [mandelbrot thread]:            [76.567] ms
+                                        (3.41x speedup from 6 threads)
+
+7 threads 
+    ./mandelbrot
+    ./mandelbrot --view 2
+        failed to run due to the split logic         
+8 threads 
+    ./mandelbrot
+        [mandelbrot serial]:            [445.218] ms
+        [mandelbrot thread]:            [108.170] ms
+                                        (4.12x speedup from 8 threads)
+
+    ./mandelbrot --view 2
+        [mandelbrot serial]:            [250.119] ms
+        [mandelbrot thread]:            [61.708] ms
+                                        (4.05x speedup from 8 threads)

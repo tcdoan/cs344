@@ -69,13 +69,21 @@ bool verifyResult(int *gold, int *result, int width, int height)
     return 1;
 }
 
+// Extend code to use 2, 3, 4, 5, 6, 7, and 8 threads,
+// Partitioning the image generation work accordingly. Threads should get blocks of the image.
+// Processor only has four cores but each core supports two hyper-threads,
+//  so it can execute a total of eight threads interleaved on its execution contents.
+// Produce a graph of speedup compared to the reference sequential implementation as a function of the number of threads used FOR VIEW 1.
+// Is speedup linear in the number of threads used?
+// Hypothesize why this is (or is not) the case?
+// Produce a graph for VIEW 2 to help you come up with a good answer.
+// Hint: take a careful look at the three-thread datapoint.
 int main(int argc, char **argv)
 {
-
     const unsigned int width = 1600;
     const unsigned int height = 1200;
     const int maxIterations = 256;
-    int numThreads = 2;
+    int numThreads = 8;
 
     float x0 = -2;
     float y0 = -1;
