@@ -28,22 +28,32 @@ extern void mandelbrotSerial(
 // Thread entrypoint.
 void workerThreadStart(WorkerArgs *const args)
 {
-
     // TODO FOR CS149 STUDENTS: Implement the body of the worker
     // thread here. Each thread should make a call to mandelbrotSerial()
     // to compute a part of the output image.  For example, in a
     // program that uses two threads, thread 0 could compute the top
     // half of the image and thread 1 could compute the bottom half.
+    float x0 = args->x0;
+    float y0 = args->y0;
+    float x1 = args->x1;
+    float y1 = args->y1;
 
-    printf("Hello world from thread %d\n", args->threadId);
+    int width = args->width;
+    int height = args->height;
+
+    int numThreads = args->numThreads;
+    int tid = args->threadId;
+
+    int numRows = height / numThreads;
+    int startRow = numRows * tid;
+    mandelbrotSerial(x0, y0, x1, y1, width, height, startRow, numRows, args->maxIterations, args->output);
 }
 
 // Parallelize the computation of the images using std::thread.
-// Starter code that spawns one additional thread is in the function mandelbrotThread()
-// In this function, the main application thread creates another additional thread using the constructor std::thread(function, args...)
-// It waits for this thread to complete by calling join on the thread object
-// Initially the launched thread does not do any computation and returns immediately
-// TODO: Add code to workerThreadStart function to accomplish this task.
+// Modify the starter code to parallelize the Mandelbrot generation using two processors.
+// Compute the top half of the image in thread 0, and the bottom half of the image in thread 1.
+// This type of problem decomposition is referred to as spatial decomposition
+// since different spatial regions of the image are computed by different processors
 void mandelbrotThread(
     int numThreads,
     float x0, float y0, float x1, float y1,
