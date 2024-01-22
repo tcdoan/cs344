@@ -1,0 +1,2 @@
+Playlist: https://www.youtube.com/playlist?list=PLAwxTw4SYaPnFKojVQrmyOGFCqHTxfdv2
+Repo: https://github.com/udacity/cs344
