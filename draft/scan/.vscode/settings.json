@@ -2,5 +2,7 @@
     "files.associations": {
         "ostream": "cpp",
         "cmath": "cpp"
-    }
+    },
+    "editor.formatOnSave": true,
+    "remote.SSH.remoteServerListenOnSocket": true
 }
